@@ -1,5 +1,5 @@
 ---
-title: "CITS4009 Project 1 - Analysis of crowdfunding data from Kickstarter"
+title: "Analysis of crowdfunding data from Kickstarter"
 author: "David Ika, 21520699"
 date: "23/08/2020"
 output:
@@ -81,7 +81,7 @@ theme_set(theme_minimal()+
 
 ## Dataset
 ```{R}
-kstrain <- read.csv("C:/Users/David/OneDrive/University/CITS4009 - Computational Data Analysis/Project 1/train.csv")
+kstrain <- read.csv("C:/Users/David/OneDrive/University/Project 1/train.csv")
 ```
 
 
