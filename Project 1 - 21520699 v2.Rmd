@@ -1,0 +1,757 @@
+---
+title: "CITS4009 Project 1 - Analysis of crowdfunding data from Kickstarter"
+author: "David Ika, 21520699"
+date: "23/08/2020"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 5
+    number_sections: yes
+    theme: united
+---
+
+# - Introduction 
+
+This Project will apply various methods in to a dataset to clean, transform, visualise and report on observations.
+
+Chosen dataset is titled "Funding Successful Projects on Kickstarter" and can be found on Kaggle [here](https://www.kaggle.com/codename007/funding-successful-projects). Uploaded by user [Lathwal](https://www.kaggle.com/codename007)
+
+The dataset was released by company, [Kickstarter](https://www.kickstarter.com/), who connects community investors with start-up projects in an 'all-or-nothing' fashion: The user sets a goal for their project, and if it falls short by even $1, zero funding is attained.
+
+Data was initially released to help early prediction of whether a project will be successfully funded, but also provides other information that potential authors may find useful.
+
+# - Preparation 
+
+## Libraries
+```{R}
+#install.packages()
+```
+```{R message=FALSE}
+#general
+library(dplyr) #data cleaning.
+library(tidyverse)
+library(anytime) #time formats.
+library(forcats) #data sorting.
+library(scales) #labelling axes.
+library(lubridate) #manipulate date/time.
+library(stringr) #splitting columns
+library(countrycode) #country codes.
+library(tidyquant) #xts convert
+
+#Plotting
+library(corrplot)
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(ggthemes)
+library(vcd)
+library(forecast) #seasonal
+
+#Text analysis
+library(tm)
+library(wordcloud)
+library(wordcloud2)
+library(RColorBrewer) 
+library(extrafont)
+
+#Mapping
+library(sf)
+library(rvest)
+library(stringr)
+library(scales)
+library(viridis)
+```
+
+## Theme
+Theme will be automatically applied to future ggplots without further code.
+```{R warning=FALSE}
+theme_set(theme_minimal()+
+              theme(text = element_text(size = 9, colour = "grey20"),
+                    axis.text = element_text(size = 10, colour = "grey10"),
+                    axis.title = element_text(size=11,face="bold"),
+                    plot.title = element_text(size=12,face="bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "grey20", 
+                      size = 1, linetype = "solid"),
+    axis.ticks = element_line(size = 0.5)))
+    ```
+
+## Dataset
+```{R}
+kstrain <- read.csv("C:/Users/David/OneDrive/University/CITS4009 - Computational Data Analysis/Project 1/train.csv")
+```
+
+
+# - Initial Observations 
+
+## Structure and summary
+```{R echo = T, results = 'hide'}
+str(kstrain)
+```
+* Total of 108,129 projects analysed across 14 variables.
+* Shows various data types: character strings, integers, numerical values and Booleans.
+* Some chr variables may need to be converted to factors or numeric values.
+* Some formats will need to be transformed to be useful.
+* Good mix of info: geographic, time-related, author-related, text-based.
+
+```{R echo = T, results = 'hide'}
+summary(kstrain)
+```
+* Huge variance in goal amount: 0 to 10 million.
+* To be converted to factor: country, currency, outcome.
+* Time-related variables to be transformed: deadline, state_changed_at, created_at, launched_at.
+
+## Variables and context
+```{R}
+names(kstrain)
+```
+* project_id: unique id of project.
+* name: name of project.
+* desc: description of project.
+* goal: $ amount required for project.
+* keywords: words describing project.
+* disable_communication: whether project author has opted to disable communication with donors.
+* country: country of project's author.
+* currency: currency of goal amount.
+* deadline: goal must be achieved on or before this date (unix time format).
+* state_changed_at: at this time, project status changed to successful or otherwise (1,0). Unix time format.
+* created_at: at this time, project was posted to Kickstarter (unix time format).
+* launched_at: at this time, project went live on website (unix time format).
+* backers_count: number of people who backed the project.
+* final_status: whether project was successfully funded (1 = True; 0 = False).
+
+Renaming some variables for clarity:
+```{R}
+names(kstrain)[6] <- "disable_comms"
+names(kstrain)[13] <- "backers"
+names(kstrain)[14] <- "outcome"
+```
+
+## Subsetting and summarising numerical data
+```{R}
+kstrain_num <- kstrain[,!sapply(kstrain, is.character)]
+
+summary(kstrain_num)
+```
+* disable_comms: Only 323 out of 108,129 elected to disable this communication. Exclude from analysis (immaterial).
+* Time conversions required, as noted.
+* NAs have been observed; to be dealt with.
+
+## Examples of each variable
+```{R}
+head(kstrain,3)
+```
+
+* project_id: merely an identifier and does not add value to this project. To be removed.
+* desc: some messy text.
+* name: "?" to be dealt with. May imply invalid data of row.
+
+
+# - Data Cleaning & Transformation 
+
+## Checking NAs
+Per column:
+```{R}
+(apply(is.na(kstrain), 2, sum))
+```
+Total NAs:
+```{R}
+sum(apply(is.na(kstrain), 2, sum))
+```
+Thus far, only 22 NAs from entire dataset out of 108,129 obs. Safe to remove without  affecting dataset. Assigning non-NA data to kstrain1.
+```{R}
+kstrain1 <- na.omit(kstrain)
+```
+
+### Transforming further invalid data into NAs
+Recall that some "?" values were identified. Converting these, along with blanks and "NA" chr strings, to actual NAs.
+```{R}
+kstrain1[kstrain1 == "NA"] <- NA
+kstrain1[kstrain1 == ""] <- NA
+kstrain1[kstrain1 == "?"] <- NA
+```
+### Re-running the check
+```{R}
+sum(apply(is.na(kstrain1), 2, sum))
+```
+And again, removing NAs
+```{R}
+kstrain2 <- na.omit(kstrain1)
+```
+
+## Sense checks
+With prior context, checking for nonsensical data:
+
+* goal should not be negative.
+
+* state_changed_at should not be before created at nor launched_at.
+
+* deadline should not be before created at nor launched_at.
+
+Unless these count for a large portion, we will remove those rows.
+
+```{R}
+count(kstrain2[kstrain2[4] < 0, ])
+count(kstrain2[kstrain2$deadline < kstrain2$launched_at,])
+count(kstrain2[kstrain2$deadline < kstrain2$created_at,])
+count(kstrain2[kstrain2$state_changed_at < kstrain2$launched_at,])
+count(kstrain2[kstrain2$state_changed_at < kstrain2$created_at,])
+```
+No anomalies.
+
+## Where data is categorical, converting strings to factors
+```{R}
+kstrain2$country <- factor(kstrain2$country)
+kstrain2$currency <- factor(kstrain2$currency)
+kstrain2$outcome <- factor(kstrain2$outcome)
+```
+
+## Where data should be numeric and continuous, converting  strings into numerals
+```{R}
+kstrain2$deadline <- as.numeric(kstrain2$deadline)
+kstrain2$created_at <- as.numeric(kstrain2$created_at)
+kstrain2$backers <- as.numeric(kstrain2$backers)
+```
+
+## Country acronyms to names
+Converting the country acronyms to long-handed characters, then back into factors.
+
+```{R}
+kstrain2$country <- factor(countrycode(kstrain2$country, "iso2c", "country.name"))
+```
+
+## Dropping  variable
+As mentioned, dropping due to redundancy, but will use a new variable should we wish to revert.
+```{R}
+kstrain3 <- select(kstrain2,-1)
+```
+## Unix time formats to date objects
+As mentioned, the following variables are in unix time format which will now be converted into a more usable date object. Again, assigning converted columns + dataset to a new variable, should we wish to revert.
+
+* deadline
+* state_changed_at
+* created_at
+* launched_at
+```{R}
+kstrain4 <- kstrain3
+kstrain4[8:11] <- lapply(kstrain4[8:11], anydate)
+head(kstrain4[8:11],5)
+```
+Variables that were in unix time formats now show as yyyy-mm-dd.
+
+## Re-summarise
+```{R}
+summary(kstrain4)
+```
+
+Overall summary now makes a lot more sense.
+
+
+# - Exploring and visualising variables 
+## Correlations
+Using a correlogram to give a high-level overview of correlations between numerical variables. 
+
+### Numerical
+
+```{R fig.height=5, fig.width = 6, warning=FALSE}
+#prep
+kstrain4_nums <- as.data.frame(lapply(kstrain4, as.numeric))
+kstrain4_nums <- kstrain4_nums[c(3,8:12)]
+kstrain4_corr <- cor(kstrain4_nums)
+#plot
+corrplot(kstrain4_corr,
+         method="color",
+         type="upper",
+         tl.col="black",
+  title = "Numeric correlations",
+  mar=c(0,0,2,0))
+```
+
+Strong correlations between time data, which makes sense: deadline will often equal state_changed_at unless the user cancels project early. People would also often launch on creation date. Surprisingly no correlation between goal and backers, perhaps implying that the size of the goal does not influence the size of a person's donation.
+
+
+### Categorical
+Now using a mosaic chart to observe correlations between categorical data.
+
+```{R fig.align="center", fig.width = 10, warning=FALSE}
+#prep
+kstrain4_cat <- as.data.frame(lapply(kstrain4[c(6,7,13)], as.factor))
+
+kstrain4_cat$country <- kstrain4_cat$country %>%
+  as.character() %>%
+  countryname(destination = "iso2c")
+
+kst <- xtabs(~outcome + country + currency,
+                kstrain4_cat)
+
+#plot
+mosaic(kst,
+       main = "Categorical correlations", size=2,
+       set_labels = list(outcome = c("Fail", "Success"),
+                         country = c("Aus","Can","","","UK","","","","","","US"),
+                         currency = c("","","","","Others","","","","USD")))
+```
+
+The mosaic plot gives us an idea of correlation between categorical variables based on their relative proportion to each another (this is not observing absolute counts). Some observations:
+
+* More outcomes failed than succeeded, roughly 70:30. 
+* US is the most prevalent country; USD the most prevalent currency. 
+* US-based projects are slightly more correlated with success than failure. 
+* Using USD seems equally correlated with success and failure. 
+
+## By country
+
+Observing total project count across countries on a log scale (due to US count being far higher than others), and then success rates across countries.
+
+```{R fig.align="center", fig.width=10, message=FALSE, warning=FALSE, dpi=300}
+#prep co1
+kstrain4.seg <- kstrain4 %>%
+    group_by(country) %>%
+    summarise(Freq=n())
+
+#prep co2
+prep.levels <- function(variable){
+  names(sort(tapply(kstrain4$outcome == "1", variable, mean)))
+}
+successlvls <- prep.levels(kstrain4$country)
+
+#plot
+co1 <- ggplot(kstrain4.seg,
+       aes(x=reorder(country,Freq),
+           y = Freq)) +
+    geom_segment(aes(xend=country, yend=0), colour="#74b45e") +
+    geom_point(size=4, colour="#74b45e") +
+    coord_flip() +
+    scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x),
+                  labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    labs(title = "Project count by country",
+         subtitle = "Total from May 2009 to May 2015",
+         y = "Project count",
+         x = "Country")
+
+co2 <- ggplot(data = kstrain4, aes(factor(country, levels = successlvls), fill = outcome)) +
+     geom_bar(position = "fill", width = 0.5) +
+     labs(title = "Success rate by country",
+          subtitle = "Average from May 2009 to May 2015",
+          x = NULL,
+          y = "Percentage successful",
+          color = "test") +	
+     scale_y_continuous(labels = percent) +
+    scale_fill_manual(labels = c("Fail","Success"),
+                      values=c("#E7B800", "#00AFBB"),
+                      name = "Outcome",
+                      guide = guide_legend(reverse = TRUE)) +
+    coord_flip() +
+    theme(legend.key.size = unit(0.9,"line"))
+
+grid.arrange(co1, co2, nrow = 1)
+```
+
+
+Further visualising with a global map:
+```{R fig.align="center", }
+#Prep
+country_freq <- data.frame(table(kstrain4$country))
+map_freq <- map_data('world') #load map data
+map_join <- left_join(map_freq, country_freq, by = c('region' = 'Var1')) #join
+
+#Plot
+ggplot(map_join, aes( x = long, y = lat, group = group )) +
+    geom_polygon(aes(fill = Freq), lwd = 1) +
+    labs(fill = 'Activity',
+         title = 'Activity by country',
+         subtitle = 'Total project count, May 2009 to May 2015',
+         x = NULL,
+         y = NULL) +
+  scale_fill_continuous(breaks = c(1000,2000,3000), labels = c("500","5,000","50,000+")) +
+  theme(axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        panel.grid = element_blank(),
+        plot.background = element_rect(fill = 'white'),
+        legend.position = c(.14,.50),
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        legend.title = element_text(size = 8), 
+        legend.text = element_text(size = 7),
+        axis.line.y = element_line(colour = "white"),
+        axis.line.x = element_line(colour = "white"))
+
+```
+
+Far more projects with authors in the US compared to other countries. Aligns with notion of pronounced start-up culture in the US. Note, however, Kickstarter was founded in the US and only went global 4 years later, likely affecting regional presence.
+
+US out on top, not only in overall project count, but also in success rate. Impressive, but other countries' success rates were not far off.
+
+
+## By currency
+
+```{R fig.align="center", fig.width=10, message=FALSE, warning=FALSE, dpi=300}
+#prep co1
+kstrain4.seg <- kstrain4 %>%
+    group_by(currency) %>%
+    summarise(Freq=n())
+
+#prep co2. prior funtion used.
+currency.success <- prep.levels(kstrain4$currency)
+
+#plot
+co1 <- ggplot(kstrain4.seg,
+       aes(x=reorder(currency,Freq),
+           y = Freq)) +
+    geom_segment(aes(xend=currency, yend=0), colour="#74b45e") +
+    geom_point(size=4, colour="#74b45e") +
+    coord_flip() +
+    scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x),
+                  labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    labs(title = "Project count by currency",
+         subtitle = "Total from May 2009 to May 2015",
+         y = "Project count",
+         x = "currency")
+co2 <- ggplot(data = kstrain4, aes(factor(currency, levels = currency.success), fill = outcome)) +
+     geom_bar(position = "fill", width = 0.5) +
+     labs(title = "Success rate by currency",
+          subtitle = "Average from May 2009 to May 2015",
+          x = NULL,
+          y = "Percentage successful",
+          color = "test") +	
+     scale_y_continuous(labels = percent) +
+    scale_fill_manual(labels = c("Fail","Success"),
+                      values=c("#E7B800", "#00AFBB"),
+                      name = "Outcome",
+                      guide = guide_legend(reverse = TRUE)) +
+    coord_flip() +
+    theme(legend.key.size = unit(0.8,"line"))
+grid.arrange(co1, co2, nrow = 1)
+```
+
+Corresponding to country, the USD had the largest project count and success rate, regardless of where it was used. Plots also show that currency frequencies had a tighter spread (count and rate) than countries, likely because other countries use the USD.
+
+
+## By backers and goal
+
+Using log scale due to heavy right skew.
+```{R fig.align="center", message=FALSE, warning=FALSE}
+ggplot(kstrain4,aes(x=goal,y=backers,colour=outcome))+
+        geom_point(shape=20, size=1.5)+
+    xlim(0,NA)+
+        labs(title = "Relationship between backers and goal",
+             subtitle = "Plotted on log scales",
+             x = "Goal ($)",
+             y = "Backers",
+             fill = "Outcome")+
+        scale_x_log10(limits=c(1,NA),
+                      breaks = scales::trans_breaks("log10", function(x) 10^x),
+                  labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+    scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x),
+                  labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    scale_colour_manual(values=c("#E7B800", "#00AFBB"), 
+                        labels = c("Fail", "Success"),
+                        name = "Outcome",
+                        guide = guide_legend(reverse = TRUE)) +
+  theme(legend.text = element_text(size=9))
+```
+
+Clustering shows projects of higher goals being harder to achieve, as expected. Higher goals also generally need more backers.
+
+Turning point for success or fail is around where blue meets orange, and might be seen as the average of the lowest amount of backers required for a certain goal. That is, potential authors may size a market of backers and work back to optimise goal amount, or vice versa.
+
+
+## By time
+
+We have 4 key variables to explore time-related trends. Recall that we previously converted them from unix time formats to date objects.
+
+* 1. deadline: due date for project to reach goal.
+
+* 2. state_changed_at: date project changed status (i.e. success, fail)
+
+* 3. created_at: date that project was posted to Kickstarter.
+
+* 4. launched_at: date that project went live.
+
+
+### Across years
+
+```{R fig.align="center", message=FALSE, warning=FALSE}
+#Extract dates
+activity.month <- kstrain4[10]
+#Show count for yyyy-mm
+activity.month$created_at <- format(as.Date(activity.month$created_at), "%Y-%m")
+count_activity.m <- count(activity.month, created_at)
+#convert chr to date
+count_activity.m$created_at <- anydate(count_activity.m$created_at)
+
+# Plot
+ggplot(data = count_activity.m,
+              aes(x = created_at,
+                  y = n)) + 
+    geom_point(colour = "#00AFBB",
+              group=1, size = 1.3) +
+    stat_smooth(lwd = 0.8, colour = "#00AFBB", se = FALSE) +
+    labs(title = "Total projects over time") +
+    xlab('Timeline') +
+    ylab('Project count per month')
+```
+
+Positive linear increase in project counts from 2010 to 2014 inclusive.
+
+From brief research, I was unable to find reasoning for the strong spike around mid-2014. Data still seems legitimate and aligns with activity on Google Trends. See [here](https://trends.google.com/trends/explore?date=2010-01-01%202014-12-31&geo=US&q=%2Fm%2F0bwhy_7), which shows activity with reference to that high point. Unsure on low-point in late 2014.
+
+Below is a similar plot, but instead observing each year's activity relative to one another.
+
+```{R fig.align="center", message=FALSE, warning=FALSE}
+
+monthsrate <- kstrain4[c(9)]#Extract dates
+
+monthsrate$yearmo <- format(as.Date(monthsrate$state_changed_at), "%Y-%m")#Form new column to show yyyy-mm
+
+monthsratefreq <- data.frame(table(monthsrate$yearmo))#Create freq table
+
+monthsratefreq$year <- format(str_sub(monthsratefreq$Var1, 1, 4))#form year col
+monthsratefreq$month <- format(str_sub(monthsratefreq$Var1, -2))#Form month col
+monthsratefreq$year <- as.character(monthsratefreq$year)
+monthsratefreq1 <- subset(monthsratefreq, year!="2009" & year!="2015")#exclude 2009 & 2015 (non-whole years)
+
+#plot
+ggplot(data = monthsratefreq1,
+        aes(x = month,
+            y = Freq,
+            group = year,
+            colour = year)) +
+  geom_smooth(size = 0.75, se = FALSE) +
+  geom_line(size = 0.5) +
+  geom_point(lwd = 0.3) +
+     labs(title = "Projects per month, split by year",
+          x = "Month",
+          y = "Count") +
+     scale_x_discrete(labels = c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"))
+```
+
+Upward progression of the lines show the growth in project count across years, in line with previous plot. Highly similar progression from January to May in years 2012 to 2014 - possible seasonal trend that may be repeated going forward.
+
+What we see more clearly in this graph is the stagnation from 2012 to 2013, before the impressive surge around May 2014; perhaps due to the early 2014 [change in management](https://www.vox.com/2014/3/6/11624254/at-a-billion-dollars-pledged-kickstarter-ceo-yancey-strickler-reflects).
+
+
+### Between months and days
+
+To observe activity levels between months and days, we will observe variables state_changed_at and outcome, again only for full-years 2010 - 2014.
+
+
+```{R fig.align="center", fig.height=10, message=FALSE, warning=FALSE,}
+#prep o1
+months <- kstrain4[c(9,13)]
+
+#create function to limit dates:
+lim.dates <- function(df,col){
+  subset(df, col >= '2010-01-01' & col <= '2014-12-31')
+}
+months0 <- lim.dates(months, months$state_changed_at)
+
+months1 <- months0
+months1$state_changed_at <- strftime(months0$state_changed_at, "%m")#convert to month only
+monthsfreq <- data.frame(table(months1$state_changed_at, months1$outcome)) #new df for freqs
+monthsfreq$Freq <- (monthsfreq$Freq)/5 #avg freq count
+
+#prep o2
+days <- kstrain4[c(9,13)]
+
+#reapply function lim.dates
+days0 <- lim.dates(days,days$state_changed_at)
+
+days0$state_changed_at <- wday(days0$state_changed_at, label = TRUE) #convert to day only
+daysfreq <- data.frame(table(days0$state_changed_at, days0$outcome)) #new df for freqs
+daysfreq$Freq <- (daysfreq$Freq/(5*52)) #avg freq count
+
+#plot
+o1 <- ggplot(data = monthsfreq,
+             aes(x = Var1,
+                 y = Freq,
+                 group = Var2,
+                 colour = Var2)) +
+    geom_line(lwd=0.3) +
+    geom_point() +
+    stat_smooth(lwd = 0.8, se = FALSE) +
+    labs(title = "Average outcomes per month",
+         subtitle = "Yearly average, 2010-2014",
+         x = "Month",
+         y = "Count") +
+    scale_x_discrete(labels = c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")) +
+    scale_colour_manual(values=c("#E7B800", "#00AFBB"), 
+                        labels = c("Fail", "Success"),
+                        name = "") +
+    theme(legend.position = "top",
+          legend.text = element_text(size=10),
+          legend.key.size = unit(2,"line"))
+          
+
+o2 <- ggplot(data = daysfreq,
+             aes(x = Var1,
+                 y = Freq,
+                 group = Var2,
+                 colour = Var2)) +
+    geom_line(lwd=0.3) +
+    geom_point() +
+    stat_smooth(lwd = 0.8, se = FALSE) +
+    labs(title = "Average outcomes per weekday",
+         subtitle = "Yearly average, 2010-2014",
+         x = "Day",
+         y = "Count") +
+    scale_colour_manual(values=c("#E7B800", "#00AFBB"), 
+                        labels = c("Fail", "Success"),
+                        name = "Outcome") +
+    theme(legend.position = "none")
+
+grid.arrange(o1, o2, nrow=2)
+```
+
+Heightened activity in second half of calendar years. Observing the gap between lines, we see that Feb/Mar had the highest success rates (smaller gap = higher portion of successful projects).
+
+By similar observation, we see most activity occurred Thursday to Saturday, with dips from Monday to Wednesday. Highest success rates were on Tuesdays and Wednesdays.
+
+
+## By length of project
+
+We can find length of project by subtracting launched_at from state_changed_at. We will observe this and filter for only successful projects.
+
+```{R fig.align="center", message=FALSE, warning=FALSE,}
+#prep
+kstrain5 <- kstrain4[c(9,11,13)]
+kstrain5$outcome <-  as.character(kstrain5$outcome)
+kstrain5 <- subset(kstrain5, kstrain5$outcome == "1") #successful only
+kstrain5$length <- kstrain5$state_changed_at - kstrain5$launched_at #length in days
+
+
+#plot
+ggplot(data = kstrain5,
+       aes(x = launched_at, y = length)) +
+  stat_binhex(colour = "#00AFBB") +
+  labs(title = "Length of successful projects over time",
+       subtitle = "May 2009 to May 2015",
+       x = "Launch date",
+       y = "Length (days") +
+  theme(text = element_text(size = 9, colour = "grey20"),
+                    axis.text = element_text(size = 10, colour = "grey10"),
+                    axis.title = element_text(size=11,face="bold"),
+                    plot.title = element_text(size=12,face="bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "grey20", 
+                      size = 1, linetype = "solid"),
+    axis.ticks = element_line(size = 0.5))
+```
+
+Around mid 2011 we see a noticeable drop in the variance of successful project lengths, reducing to about 5 to 60 days.
+
+We then see a trend forming around 2012 onward, where the largest portion of successful projects had a length of about 30 days.
+
+
+## Text analysis
+
+The dataset presents us with 3 columns for text analysis: name, desc and keywords. Only keywords will be analysed as it is the most consistent in format and cleanliness.
+
+The word cloud below is based on all projects, with a larger size indicating greater relative frequency. Hover over words for total count. Note that there may be slight differences in word clouds based on browser window size (i.e. can resize window then refresh).
+
+```{R fig.align="center", message=FALSE, warning=FALSE}
+#prep
+keywords <- strsplit(kstrain4$keywords, split = "-") #select, xform
+keywords_0 <- data.frame(unlist(keywords))
+keywords_1 <- paste(keywords_0$unlist.keywords., collapse=" ") #combine txt
+#Form & clean corpus
+keywords.corpus <- Corpus(VectorSource(keywords_1))
+keywords.corpus = keywords.corpus %>%
+    tm_map(removeNumbers) %>%
+    tm_map(removePunctuation) %>%
+    tm_map(stripWhitespace) %>%
+    tm_map(content_transformer(tolower)) %>%
+    tm_map(removeWords, stopwords("english")) %>%
+    tm_map(removeWords, stopwords("SMART")) 
+#Form matrix from corpus
+tdm <- TermDocumentMatrix(keywords.corpus) %>%
+    as.matrix()
+words = sort(rowSums(tdm), decreasing = TRUE)
+keywords.df <- data.frame(word = names(words), freq = words)
+
+#plot fn
+plot.wc <- function(x){
+  wordcloud2(x,
+             color = "black",
+             backgroundColor = "white",
+             size = 2.5,
+             minSize = 5,
+             rotateRatio = 0)
+}
+
+plot.wc(keywords.df)
+
+```
+
+
+The cloud gives us an idea of popular themes/categories in projects (successful or otherwise), and how they were described. For a potential new author of a project, they may use a live version of this to indicate saturation of certain themes/categories/topics in the crowdfunding market.
+
+Below, we run the same code but subsetting for only successful projects.
+
+```{R fig.align="center", message=FALSE, warning=FALSE}
+#Selection
+obstext_0 <- kstrain4[c(4,13)]
+obstext_suc <- obstext_0 %>%
+group_by(keywords) %>%
+filter(any(outcome == "1"))
+obstext_suc_1 <- obstext_suc[-2]
+#Transformation
+keywords_suc <- strsplit(obstext_suc_1$keywords, split = "-")
+keywords_suc_0 <- data.frame(unlist(keywords_suc))
+keywords_suc_1 <- paste(keywords_suc_0$unlist.keywords_suc., collapse=" ") #combine text
+keywords_suc.corpus <- Corpus(VectorSource(keywords_suc_1))
+#Cleaning corpus with tm_map
+keywords_suc.corpus = keywords_suc.corpus %>%
+    tm_map(removeNumbers) %>%
+    tm_map(removePunctuation) %>%
+    tm_map(stripWhitespace) %>%
+    tm_map(content_transformer(tolower)) %>%
+    tm_map(removeWords, stopwords("english")) %>%
+    tm_map(removeWords, stopwords("SMART")) 
+#Form matrix from corpus
+tdm <- TermDocumentMatrix(keywords_suc.corpus) %>%
+    as.matrix()
+words = sort(rowSums(tdm), decreasing = TRUE)
+keywords_suc.df <- data.frame(word = names(words), freq = words)
+
+#plot w/prior function
+plot.wc(keywords_suc.df)
+```
+
+
+Observing differences in word size between the two clouds may indicate that films and games had a higher success rate than, for example, books, art or tours. *debut* making an interestingly large appearance whilst not noticeable in the total projects word cloud (again, dependent on browser size).
+
+
+# - Summary
+
+That was fun. After some cleaning and transformations, we were able to explore and visualise correlations and trends by country, currency, the amount of backers, the goal amount, time and text.
+
+Throughout, we saw trends that may assist:
+
+* Kickstarter itself: such as with marketing or analysis of areas and periods of time to focus on.
+
+* Project creators: such as knowing that certain times of the year (down to the day) have clearly had more success than others. Or, knowing what types of projects are trending, or what country has been most successful, or the most successful project lengths.
+
+* Donors: similarly to creators, may consider that certain times of the year show more success, and so may put their effort into browsing and donating at that time, where perhaps there is a higher likelihood that their donation will lead to a successful funding.
+
+
+## References
+
+* (n.d.). Retrieved September 1, 2020, from https://rkabacoff.github.io/datavis/Models.html
+
+* Abhimotgi. (2020, July 15). Abhimotgi/dataslice. Retrieved August 27, 2020, from https://github.com/abhimotgi/dataslice/blob/master/R/Word Clouds in R.R
+
+* Kassambara. (2017, November 17). Plot Time Series Data Using GGPlot. Retrieved August 20, 2020, from http://www.sthda.com/english/articles/32-r-graphics-essentials/128-plot-time-series-data-using-ggplot/
+
+* Kickstarter, L. (2017, June 20). Funding Successful Projects on Kickstarter. Retrieved August 17, 2020, from https://www.kaggle.com/codename007/funding-successful-projects
+* PHPBoost. (n.d.). Visualize correlation matrix using correlogram. Retrieved September 1, 2020, from http://www.sthda.com/english/wiki/visualize-correlation-matrix-using-correlogram
+* Prabhakaran, S. (2017). Top 50 ggplot2 Visualizations - The Master List (With Full R Code). Retrieved August 28, 2020, from http://r-statistics.co/Top50-Ggplot2-Visualizations-MasterList-R-Code.html
+* Sharp Sight. (2019, November 15). Mapping oil production by country using R. Retrieved August 20, 2020, from https://www.sharpsightlabs.com/blog/map-oil-production-country-r/
+
+</div>
