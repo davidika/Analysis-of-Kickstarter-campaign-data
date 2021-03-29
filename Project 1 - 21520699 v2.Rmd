@@ -1,6 +1,6 @@
 ---
 title: "Analysis of crowdfunding data from Kickstarter"
-author: "David Ika, 21520699"
+author: "David Ika"
 date: "23/08/2020"
 output:
   html_document:
