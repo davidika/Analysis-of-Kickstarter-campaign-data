@@ -1,4 +1,4 @@
-# - Introduction 
+# Introduction 
 
 This Project will apply various methods in to a dataset to clean, transform, visualise and report on observations.
 
